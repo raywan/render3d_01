@@ -100,7 +100,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>W:\tinyobjloader;C:\SDL2-2.0.9\include;W:\glad\include;C:\work\stb;W:\Projects\rw;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>W:\enkiTS\src;W:\tinyobjloader;C:\SDL2-2.0.9\include;W:\glad\include;C:\work\stb;W:\Projects\rw;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level1</WarningLevel>
     </ClCompile>
     <Link>
@@ -118,7 +118,7 @@ xcopy /E /I /Y $(ProjectDir)shaders "$(OutDir)/shaders"</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>W:\tinyobjloader;C:\SDL2-2.0.9\include;W:\glad\include;C:\work\stb;W:\Projects\rw;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>W:\enkiTS\src;W:\tinyobjloader;C:\SDL2-2.0.9\include;W:\glad\include;C:\work\stb;W:\Projects\rw;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level1</WarningLevel>
     </ClCompile>
     <Link>

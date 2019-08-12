@@ -17,6 +17,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <TaskScheduler_c.h>
+
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
@@ -30,6 +32,9 @@ constexpr int TICKS_PER_SECOND = 60;
 constexpr int SKIP_TICKS = 1000 / TICKS_PER_SECOND;
 constexpr int MAX_FRAMESKIP = 10;
 
+enkiTaskScheduler *g_pTS;
+enkiTaskSet *pTask;
+
 bool quit = false;
 bool is_next_state_wire = true;
 SDL_Window* win;
@@ -37,6 +42,9 @@ SDL_GLContext gl_context;
 uint32_t quad_vao = 0;
 uint32_t cube_vao = 0;
 uint32_t skybox_vao = 0;
+
+uint32_t plane_vao = 0;
+uint32_t plane_vbo = 0;
 
 uint32_t sphere_vao = 0;
 uint32_t sphere_vbo = 0;
@@ -97,6 +105,18 @@ struct MeshFull {
   PBRTextures textures;
 };
 
+struct GBuffer {
+  uint32_t fbo;
+  uint32_t rbo;
+  uint32_t g_pos;
+  uint32_t g_normal;
+  uint32_t g_albedo;
+  uint32_t g_metallic;
+  uint32_t g_roughness;
+  uint32_t g_ao;
+};
+
+void render_plane();
 void render_sphere();
 void render_cube();
 void render_quad();
@@ -198,6 +218,15 @@ void bind_pbr_textures(PBRTextures &t) {
   glActiveTexture(GL_TEXTURE3);
   glBindTexture(GL_TEXTURE_2D, t.roughness_tid);
   glActiveTexture(GL_TEXTURE4);
+  glBindTexture(GL_TEXTURE_2D, t.ao_tid);
+}
+
+void deferred_bind_pbr_textures(PBRTextures &t) {
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, t.metallic_tid);
+  glActiveTexture(GL_TEXTURE4);
+  glBindTexture(GL_TEXTURE_2D, t.roughness_tid);
+  glActiveTexture(GL_TEXTURE5);
   glBindTexture(GL_TEXTURE_2D, t.ao_tid);
 }
 
@@ -437,6 +466,60 @@ uint32_t create_brdf_lut(Shader &brdf_shader) {
   return brdf_tid;
 }
 
+GBuffer create_g_buffer() {
+  GBuffer result;
+  glGenFramebuffers(1, &result.fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, result.fbo);
+  glGenTextures(1, &result.g_pos);
+  glBindTexture(GL_TEXTURE_2D, result.g_pos);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, result.g_pos, 0);
+  glGenTextures(1, &result.g_normal);
+  glBindTexture(GL_TEXTURE_2D, result.g_normal);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, result.g_normal, 0);
+  glGenTextures(1, &result.g_albedo);
+  glBindTexture(GL_TEXTURE_2D, result.g_albedo);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_albedo, 0);
+  glGenTextures(1, &result.g_metallic);
+  glBindTexture(GL_TEXTURE_2D, result.g_metallic);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_metallic, 0);
+  glGenTextures(1, &result.g_roughness);
+  glBindTexture(GL_TEXTURE_2D, result.g_roughness);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_roughness, 0);
+  glGenTextures(1, &result.g_ao);
+  glBindTexture(GL_TEXTURE_2D, result.g_ao);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_ao, 0);
+  uint32_t attachments[6] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4, GL_COLOR_ATTACHMENT5 };
+  glDrawBuffers(6, attachments);
+  glGenRenderbuffers(1, &result.rbo);
+  glBindRenderbuffer(GL_RENDERBUFFER, result.rbo);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCREEN_WIDTH, SCREEN_HEIGHT);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, result.rbo);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    printf("g-buffer not created properly\n");
+  }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  return result;
+}
+
 void set_clear_color(int state) {
   switch (state) {
     case 0:
@@ -480,6 +563,7 @@ int main(int argc, char* argv[]) {
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
+  GBuffer g_buffer = create_g_buffer();
   // Load textures
   // TODO(ray): Load these on another thread
 #if 0
@@ -533,6 +617,8 @@ int main(int argc, char* argv[]) {
   Shader prefilter_s = Shader("shaders/cubemap.vert", "shaders/prefilter_convolution.frag");
   Shader brdf_s = Shader("shaders/quad.vert", "shaders/brdf.frag");
   Shader solid_s = Shader("shaders/logl_pbr.vert", "shaders/solid.frag");
+  Shader deferred_geometry_s = Shader("shaders/logl_pbr.vert", "shaders/deferred_geometry.frag");
+  Shader deferred_pbr_s = Shader("shaders/deferred_pbr.vert", "shaders/deferred_pbr.frag");
 
   uint32_t env_map_tid = create_env_map(env_s, "assets/Tokyo_BigSight_3k.hdr");
   //uint32_t env_map_tid = create_env_map(env_s, "assets/20_Subway_Lights_3k.hdr");
@@ -687,7 +773,7 @@ int main(int argc, char* argv[]) {
 
     // Render
     // Phase 1
-#if 1
+#if 0
     glBindFramebuffer(GL_FRAMEBUFFER, fb);
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.1, 0.1, 0.1, 1.0);
@@ -742,7 +828,10 @@ int main(int argc, char* argv[]) {
     cur_shader->set_unif_mat4("u_model", &model_tr.t);
     render_mesh_full(bunny);
 
-#if 1
+    //bind_pbr_textures(aluminium);
+    //render_plane();
+
+#if 0
     bind_pbr_textures(aluminium);
 
     for (int i = 0; i < num_rows; i++) {
@@ -780,8 +869,104 @@ int main(int argc, char* argv[]) {
     render_skybox(skybox_s, camera, env_map_tid);
 #endif
 
+    // phase 1 - deferred geometry
+    glBindFramebuffer(GL_FRAMEBUFFER, g_buffer.fbo);
+    glEnable(GL_DEPTH_TEST);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    cur_shader = &deferred_geometry_s;
+    cur_shader->use();
+    cur_shader->set_unif_1i("u_albedo_map", 0);
+    cur_shader->set_unif_1i("u_normal_map", 1);
+    cur_shader->set_unif_1i("u_metallic_map", 2);
+    cur_shader->set_unif_1i("u_roughness_map", 3);
+    cur_shader->set_unif_1i("u_ao_map", 4);
+    cur_shader->set_unif_1i("u_irradiance_map", 5);
+    cur_shader->set_unif_mat4("u_projection", &camera.persp_mat);
+    cur_shader->set_unif_mat4("u_view", &camera.view_mat);
+
+    Transform ts = rwtr_trs(
+      rwm_v3_init(0.0, 0.0, 10.0),
+      rwm_v3_init(2.0, 2.0, 2.0),
+      RWTR_NO_AXIS, 0.0f
+    );
+    Quaternion q1 = rwm_q_init_rotation(rwm_v3_init(0.0, 1.0, 0.0), rwm_to_radians(-90.0f));
+    Quaternion q2 = rwm_q_init_rotation(rwm_v3_init(1.0, 0.0, 0.0), rwm_to_radians(45.0f));
+    Transform r = rwtr_init_rotate_q(rwm_q_mult(q1, q2));
+    Transform model_tr = rwtr_compose(&ts, &r);
+    cur_shader->set_unif_mat4("u_model", &model_tr.t);
+    render_mesh_full(cerberus);
+
+    model_tr = rwtr_trs(
+      rwm_v3_init(1.0, 0.0, 8.6),
+      rwm_v3_init(1.0, 1.0, 1.0),
+      RWTR_NO_AXIS, 0.0f
+    );
+    cur_shader->set_unif_mat4("u_model", &model_tr.t);
+    render_mesh_full(bunny);
+
+#if 0
+    bind_pbr_textures(aluminium);
+
+    for (int i = 0; i < num_rows; i++) {
+      float metallic = (float)i/(float)num_rows;
+      cur_shader->set_unif_1f("u_metallic", metallic);
+      for (int j = 0; j < num_cols; j++) {
+        float roughness = rwm_clamp((float)j/(float)num_cols, 0.05f, 1.0f);
+        cur_shader->set_unif_1f("u_roughness", roughness);
+        Mat4 model = rwm_m4_identity();
+        model.e[0][3] = (j - (num_cols/2)) * spacing;
+        model.e[1][3] = (i - (num_rows/2)) * spacing;
+        cur_shader->set_unif_mat4("u_model", &model);
+        render_sphere();
+      }
+    }
+#endif
+
+    // Phase 2 - Lighting pass
+#if 1
+    glBindFramebuffer(GL_FRAMEBUFFER, fb);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    cur_shader = &deferred_pbr_s;
+    cur_shader->set_unif_1i("g_position", 0);
+    cur_shader->set_unif_1i("g_normal", 1);
+    cur_shader->set_unif_1i("g_albedo", 2);
+    cur_shader->set_unif_1i("g_metallic", 3);
+    cur_shader->set_unif_1i("g_roughness", 4);
+    cur_shader->set_unif_1i("g_ao", 5);
+    cur_shader->set_unif_1i("u_irradiance_map", 6);
+    cur_shader->set_unif_1i("u_prefilter_map", 7);
+    cur_shader->set_unif_1i("u_brdf_lut", 8);
+    cur_shader->use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_pos);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_normal);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_albedo);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_metallic);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_roughness);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, g_buffer.g_ao);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, irradiance_map_tid);
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, prefilter_map_tid);
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, brdf_lut_tid);
+    for (int i = 0; i < sizeof(light_positions) / sizeof(light_positions[0]); i++) {
+      std::string pos_name = "u_light_pos[" + std::to_string(i) + "]";
+      std::string col_name = "u_light_color[" + std::to_string(i) + "]";
+      cur_shader->set_unif_3fv(pos_name.c_str(), &light_positions[i]);
+      cur_shader->set_unif_3fv(col_name.c_str(), &light_colors[i]);
+    }
+
+#endif
+
     // phase 2
-    render_to_quad(quad_s, tex_color_buf);
+    //render_to_quad(quad_s, tex_color_buf);
+    render_to_quad(quad_s, g_buffer.g_normal);
 
     SDL_GL_SwapWindow(win);
   }
@@ -790,6 +975,37 @@ int main(int argc, char* argv[]) {
   SDL_DestroyWindow(win);
   SDL_Quit();
   return 0;
+}
+
+void render_plane() {
+  if (plane_vao == 0) {
+    constexpr float plane_vertices[] = {
+      // positions            // texcoords   // normals
+       10.0f, -0.5f,  10.0f,  10.0f,  0.0f,   0.0f, 1.0f, 0.0f,
+      -10.0f, -0.5f,  10.0f,   0.0f,  0.0f,   0.0f, 1.0f, 0.0f,
+      -10.0f, -0.5f, -10.0f,   0.0f, 10.0f,   0.0f, 1.0f, 0.0f,
+       10.0f, -0.5f,  10.0f,  10.0f,  0.0f,   0.0f, 1.0f, 0.0f,
+      -10.0f, -0.5f, -10.0f,   0.0f, 10.0f,   0.0f, 1.0f, 0.0f,
+       10.0f, -0.5f, -10.0f,  10.0f, 10.0f,   0.0f, 1.0f, 0.0f
+    };
+    glGenVertexArrays(1, &plane_vao);
+    uint32_t vbo;
+    glGenBuffers(1, &vbo);
+    glBindVertexArray(plane_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(plane_vertices), &plane_vertices, GL_STATIC_DRAW);
+    constexpr size_t stride =  8 * sizeof(float);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, (void *)(5 * sizeof(float)));
+  }
+  glBindVertexArray(plane_vao);
+  //glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+  glBindVertexArray(0);
 }
 
 void render_sphere() {
