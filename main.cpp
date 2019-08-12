@@ -24,6 +24,7 @@
 #include "camera.h"
 #include "input.h"
 #include "global.h"
+#include "mesh.h"
 
 constexpr int TICKS_PER_SECOND = 60;
 constexpr int SKIP_TICKS = 1000 / TICKS_PER_SECOND;
