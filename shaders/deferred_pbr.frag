@@ -63,6 +63,7 @@ vec3 fresnel_schlick_roughness(float cosTheta, vec3 F0, float roughness) {
 
 void main() {
   vec3 WorldPos = texture(g_pos, TexCoords).rgb;
+
   vec3 albedo = pow(texture(g_albedo, TexCoords).rgb, vec3(2.2));
   float metallic = texture(g_metallic, TexCoords).r;
   float roughness = texture(g_roughness, TexCoords).r;
