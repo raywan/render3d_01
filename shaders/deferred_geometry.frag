@@ -36,8 +36,8 @@ vec3 convert_normal_from_map() {
 void main() {
   g_position = WorldPos;
   g_normal = convert_normal_from_map();
-  g_albedo = pow(texture(u_albedo_map, TexCoords).rgb, vec3(2.2));
-  g_metallic = texture(u_metallic_map, TexCoords).rgb;
-  g_roughness = texture(u_roughness_map, TexCoords).rgb;
-  g_ao = texture(u_ao_map, TexCoords).rgb;
+  g_albedo = texture(u_albedo_map, TexCoords).rgb;
+  g_metallic = vec3(texture(u_metallic_map, TexCoords).r);
+  g_roughness = vec3(texture(u_roughness_map, TexCoords).r);
+  g_ao = vec3(texture(u_ao_map, TexCoords).r);
 }

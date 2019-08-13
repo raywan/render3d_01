@@ -3,6 +3,8 @@
 A very basic modern OpenGL PBR Renderer 
 
 ## Features
+- Deferred Rendering
+    - G-Buffer contains positions, normals and PBR textures 
 - Physically based shading (Cook-Torrance BRDF only)
 - Environment maps and Image Based Lighting (IBL)
     - Diffuse part using irradiance maps
@@ -18,8 +20,9 @@ A very basic modern OpenGL PBR Renderer
 - [tinyobjloader](https://github.com/syoyo/tinyobjloader) (Alternative OBJ loader from self-written one)
 
 ## Screenshots
-![Just the bunny](screenshots/r3d_01_2.png)
+<!-- ![Just the bunny](screenshots/r3d_01_2.png)  -->
 ![Bunny, Cerberus and sphere grid](screenshots/r3d_01_3.png)
+![G-Buffer Animation](screenshots/deferred/r3d_01_gbuffer.gif)
 ![Bunny and Cerberus gif](screenshots/r3d_01_4.gif)
 
 ## Assets

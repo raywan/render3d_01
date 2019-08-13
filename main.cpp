@@ -487,7 +487,7 @@ GBuffer create_g_buffer() {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_albedo, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, result.g_albedo, 0);
   glGenTextures(1, &result.g_metallic);
   glBindTexture(GL_TEXTURE_2D, result.g_metallic);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
@@ -499,13 +499,13 @@ GBuffer create_g_buffer() {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_roughness, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT4, GL_TEXTURE_2D, result.g_roughness, 0);
   glGenTextures(1, &result.g_ao);
   glBindTexture(GL_TEXTURE_2D, result.g_ao);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, SCREEN_WIDTH, SCREEN_HEIGHT, 0, GL_RGB, GL_FLOAT, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, result.g_ao, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5, GL_TEXTURE_2D, result.g_ao, 0);
   uint32_t attachments[6] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4, GL_COLOR_ATTACHMENT5 };
   glDrawBuffers(6, attachments);
   glGenRenderbuffers(1, &result.rbo);
@@ -674,7 +674,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Create the camera
-  Camera camera = Camera(rwm_v3_init(0,0,4), rwm_v3_init(0,0,-1), rwm_v3_init(0,1.0,0), 45.0, 0.1, 100.0, ASPECT_RATIO);
+  Camera camera = Camera(rwm_v3_init(0,2,15), rwm_v3_init(0,0,-1), rwm_v3_init(0,1.0,0), 45.0, 0.1, 100.0, ASPECT_RATIO);
   puts("main view_mat");
   rwm_m4_puts(&(camera.persp_mat));
   cur_shader->set_unif_mat4("u_view", &camera.view_mat);
@@ -722,8 +722,8 @@ int main(int argc, char* argv[]) {
     }
     if (is_pressed(SDL_SCANCODE_1)) {
       puts("PRESSED 1");
-      set_clear_color(state);
-      state = ++state % 5;
+      // set_clear_color(state);
+      state = ++state % 7;
     }
     if (is_down(SDL_SCANCODE_2)) {
       set_clear_color(5);
@@ -771,9 +771,8 @@ int main(int argc, char* argv[]) {
 
     camera.update(rwtm_to_ms(frame_time));
 
-    // Render
-    // Phase 1
 #if 0
+    // Forward rendering
     glBindFramebuffer(GL_FRAMEBUFFER, fb);
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.1, 0.1, 0.1, 1.0);
@@ -831,7 +830,7 @@ int main(int argc, char* argv[]) {
     //bind_pbr_textures(aluminium);
     //render_plane();
 
-#if 0
+#if 1
     bind_pbr_textures(aluminium);
 
     for (int i = 0; i < num_rows; i++) {
@@ -867,8 +866,9 @@ int main(int argc, char* argv[]) {
     }
 
     render_skybox(skybox_s, camera, env_map_tid);
-#endif
-
+    render_to_quad(quad_s, tex_color_buf);
+#else
+    // Deferred rendering
     // phase 1 - deferred geometry
     glBindFramebuffer(GL_FRAMEBUFFER, g_buffer.fbo);
     glEnable(GL_DEPTH_TEST);
@@ -904,7 +904,7 @@ int main(int argc, char* argv[]) {
     cur_shader->set_unif_mat4("u_model", &model_tr.t);
     render_mesh_full(bunny);
 
-#if 0
+#if 1
     bind_pbr_textures(aluminium);
 
     for (int i = 0; i < num_rows; i++) {
@@ -925,8 +925,10 @@ int main(int argc, char* argv[]) {
     // Phase 2 - Lighting pass
 #if 1
     glBindFramebuffer(GL_FRAMEBUFFER, fb);
+    glEnable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     cur_shader = &deferred_pbr_s;
+    cur_shader->use();
     cur_shader->set_unif_1i("g_position", 0);
     cur_shader->set_unif_1i("g_normal", 1);
     cur_shader->set_unif_1i("g_albedo", 2);
@@ -936,7 +938,7 @@ int main(int argc, char* argv[]) {
     cur_shader->set_unif_1i("u_irradiance_map", 6);
     cur_shader->set_unif_1i("u_prefilter_map", 7);
     cur_shader->set_unif_1i("u_brdf_lut", 8);
-    cur_shader->use();
+    cur_shader->set_unif_3fv("u_cam_pos", &camera.pos);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_buffer.g_pos);
     glActiveTexture(GL_TEXTURE1);
@@ -961,12 +963,43 @@ int main(int argc, char* argv[]) {
       cur_shader->set_unif_3fv(pos_name.c_str(), &light_positions[i]);
       cur_shader->set_unif_3fv(col_name.c_str(), &light_colors[i]);
     }
-
+    render_quad();
 #endif
 
-    // phase 2
-    //render_to_quad(quad_s, tex_color_buf);
-    render_to_quad(quad_s, g_buffer.g_normal);
+    // Copy depth buffer to the draw framebuffer
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_buffer.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb);
+    glBlitFramebuffer(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    render_skybox(skybox_s, camera, env_map_tid);
+
+    // phase 3 - finally render to default framebuffer quad
+    switch (state) {
+      case 0:
+        render_to_quad(quad_s, tex_color_buf);
+        break;
+      case 1:
+        render_to_quad(quad_s, g_buffer.g_pos);
+        break;
+      case 2:
+        render_to_quad(quad_s, g_buffer.g_normal);
+        break;
+      case 3:
+        render_to_quad(quad_s, g_buffer.g_albedo);
+        break;
+      case 4:
+        render_to_quad(quad_s, g_buffer.g_metallic);
+        break;
+      case 5:
+        render_to_quad(quad_s, g_buffer.g_roughness);
+        break;
+      case 6:
+        render_to_quad(quad_s, g_buffer.g_ao);
+        break;
+      default:
+        break;
+    }
+#endif
 
     SDL_GL_SwapWindow(win);
   }
@@ -1103,7 +1136,7 @@ void render_quad() {
     glBindVertexArray(quad_vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), &quad_vertices, GL_STATIC_DRAW);
-    constexpr size_t stride =  5 * sizeof(float);
+    constexpr size_t stride = 5 * sizeof(float);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)0);
     glEnableVertexAttribArray(1);
