@@ -25,6 +25,6 @@ struct Camera {
 
 Mat4 get_view_mat(Vec3 *position, Vec3 *target, Vec3 *up);
 
-Mat4 orthographic(float near, float far);
+Mat4 orthographic(float left, float right, float bottom, float top, float near, float far);
 Mat4 perspective(float fov_y, float near_z, float far_z, float aspect);
 

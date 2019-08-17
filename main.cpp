@@ -31,6 +31,8 @@
 constexpr int TICKS_PER_SECOND = 60;
 constexpr int SKIP_TICKS = 1000 / TICKS_PER_SECOND;
 constexpr int MAX_FRAMESKIP = 10;
+constexpr uint32_t SHADOW_WIDTH = 1024;
+constexpr uint32_t SHADOW_HEIGHT = 1024;
 
 enkiTaskScheduler *g_pTS;
 enkiTaskSet *pTask;
@@ -116,6 +118,12 @@ struct GBuffer {
   uint32_t g_ao;
 };
 
+PBRTextures aluminium;
+PBRTextures concrete;
+
+MeshFull cerberus;
+MeshFull bunny;
+
 void render_plane();
 void render_sphere();
 void render_cube();
@@ -124,7 +132,6 @@ void render_to_quad(Shader &quad_shader, uint32_t tex_color_buffer);
 void render_skybox(Shader &skybox_shader, Camera &camera, uint32_t skybox_tid);
 void render_mesh(Mesh &m);
 void render_mesh_full(MeshFull &m);
-
 
 TinyObjMesh tinyobj_load(std::string path) {
   TinyObjMesh result;
@@ -175,6 +182,26 @@ TinyObjMesh tinyobj_load(std::string path) {
   }
 
   return result;
+}
+
+void set_clear_color(int state) {
+  switch (state) {
+    case 0:
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    break;
+    case 1:
+    glClearColor(1.0, 0.0, 0.0, 1.0);
+    break;
+    case 2:
+    glClearColor(0.0, 1.0, 0.0, 1.0);
+    break;
+    case 3:
+    glClearColor(0.0, 0.0, 1.0, 1.0);
+    break;
+    default:
+    glClearColor(1.0, 1.0, 1.0, 1.0);
+    break;
+  }
 }
 
 uint32_t load_texture(const char *path) {
@@ -520,24 +547,106 @@ GBuffer create_g_buffer() {
   return result;
 }
 
-void set_clear_color(int state) {
-  switch (state) {
-    case 0:
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-    break;
-    case 1:
-    glClearColor(1.0, 0.0, 0.0, 1.0);
-    break;
-    case 2:
-    glClearColor(0.0, 1.0, 0.0, 1.0);
-    break;
-    case 3:
-    glClearColor(0.0, 0.0, 1.0, 1.0);
-    break;
-    default:
-    glClearColor(1.0, 1.0, 1.0, 1.0);
-    break;
+uint32_t create_shadow_map() {
+  uint32_t depth_fbo;
+  glGenFramebuffers(1, &depth_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, depth_fbo);
+
+  uint32_t depth_tid;
+  glGenTextures(1, &depth_tid);
+  glBindTexture(GL_TEXTURE_2D, depth_tid);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+  float border_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color);
+
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_tid, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    printf("depth fb not created properly\n");
   }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  return depth_fbo;
+}
+
+uint32_t create_shadow_cube_map() {
+  uint32_t depth_fbo;
+  glGenFramebuffers(1, &depth_fbo);
+
+  uint32_t depth_cube_map_tid;
+  glGenTextures(1, &depth_cube_map_tid);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, depth_cube_map_tid);
+  for (int i = 0; i < 6; i++) {
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+  }
+
+  glBindFramebuffer(GL_FRAMEBUFFER, depth_fbo);
+  glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, depth_cube_map_tid, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  return depth_cube_map_tid;
+}
+
+
+
+void render_scene(Shader *cur_shader) {
+  Transform ts = rwtr_trs(
+    rwm_v3_init(0.0, 0.0, 10.0),
+    rwm_v3_init(2.0, 2.0, 2.0),
+    RWTR_NO_AXIS, 0.0f
+  );
+  Quaternion q1 = rwm_q_init_rotation(rwm_v3_init(0.0, 1.0, 0.0), rwm_to_radians(-90.0f));
+  Quaternion q2 = rwm_q_init_rotation(rwm_v3_init(1.0, 0.0, 0.0), rwm_to_radians(45.0f));
+  Transform r = rwtr_init_rotate_q(rwm_q_mult(q1, q2));
+  Transform model_tr = rwtr_compose(&ts, &r);
+  cur_shader->set_unif_mat4("u_model", &model_tr.t);
+  render_mesh_full(cerberus);
+
+  model_tr = rwtr_trs(
+    rwm_v3_init(1.0, 0.0, 8.6),
+    rwm_v3_init(1.0, 1.0, 1.0),
+    RWTR_NO_AXIS, 0.0f
+  );
+  cur_shader->set_unif_mat4("u_model", &model_tr.t);
+  render_mesh_full(bunny);
+
+  bind_pbr_textures(concrete);
+  render_plane();
+
+  constexpr int num_rows = 7;
+  constexpr int num_cols = 7;
+  constexpr float spacing = 2.5;
+#if 1
+  bind_pbr_textures(aluminium);
+
+  for (int i = 0; i < num_rows; i++) {
+    float metallic = (float)i/(float)num_rows;
+    cur_shader->set_unif_1f("u_metallic", metallic);
+    for (int j = 0; j < num_cols; j++) {
+      float roughness = rwm_clamp((float)j/(float)num_cols, 0.05f, 1.0f);
+      cur_shader->set_unif_1f("u_roughness", roughness);
+      Mat4 model = rwm_m4_identity();
+      model.e[0][3] = (j - (num_cols/2)) * spacing;
+      model.e[1][3] = (i - (num_rows/2)) * spacing;
+      cur_shader->set_unif_mat4("u_model", &model);
+      render_sphere();
+    }
+  }
+#endif
 }
 
 int main(int argc, char* argv[]) {
@@ -573,16 +682,14 @@ int main(int argc, char* argv[]) {
   chipped_paint.metallic_tid = load_texture("assets/chipped_paint_metal/chipped-paint-metal-metal.png");
   chipped_paint.roughness_tid = load_texture("assets/chipped_paint_metal/chipped-paint-metal-rough2.png");
   chipped_paint.ao_tid = load_texture("assets/chipped_paint_metal/chipped-paint-ao.png");
+#endif
 
-  PBRTextures concrete;
   concrete.albedo_tid = load_texture("assets/concrete/concrete_floor_02_diff_1k.jpg");
   concrete.normal_tid = load_texture("assets/concrete/concrete_floor_02_Nor_1k.jpg");
   concrete.metallic_tid = load_texture("assets/concrete/concrete_floor_02_spec_1k.jpg");
   concrete.roughness_tid = load_texture("assets/concrete/concrete_floor_02_rough_1k.jpg");
   concrete.ao_tid = load_texture("assets/concrete/concrete_floor_02_AO_1k.jpg");
-#endif
 
-  PBRTextures aluminium;
   aluminium.albedo_tid = load_texture("assets/scuffed_aluminum/Aluminum-Scuffed_basecolor.png");
   aluminium.normal_tid = load_texture("assets/scuffed_aluminum/Aluminum-Scuffed_normal.png");
   aluminium.metallic_tid = load_texture("assets/scuffed_aluminum/Aluminum-Scuffed_metallic.png");
@@ -592,7 +699,6 @@ int main(int argc, char* argv[]) {
   uint32_t cube_map_tid = load_cubemap("assets/skybox");
 
   // Load obj
-  MeshFull cerberus;
   cerberus.to_mesh = tinyobj_load("assets/cerberus/cerberus.obj");
   cerberus.textures.albedo_tid = load_texture("assets/cerberus/Cerberus_A.tga");
   cerberus.textures.normal_tid = load_texture("assets/cerberus/Cerberus_N.tga");
@@ -600,7 +706,6 @@ int main(int argc, char* argv[]) {
   cerberus.textures.roughness_tid = load_texture("assets/cerberus/Cerberus_R.tga");
   cerberus.textures.ao_tid = load_texture("assets/cerberus/Cerberus_AO.tga");
 
-  MeshFull bunny;
   bunny.to_mesh = tinyobj_load("assets/bunny.obj");
   bunny.textures = aluminium;
 
@@ -619,6 +724,7 @@ int main(int argc, char* argv[]) {
   Shader solid_s = Shader("shaders/logl_pbr.vert", "shaders/solid.frag");
   Shader deferred_geometry_s = Shader("shaders/logl_pbr.vert", "shaders/deferred_geometry.frag");
   Shader deferred_pbr_s = Shader("shaders/deferred_pbr.vert", "shaders/deferred_pbr.frag");
+  Shader shadow_s = Shader("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");
 
   uint32_t env_map_tid = create_env_map(env_s, "assets/Tokyo_BigSight_3k.hdr");
   //uint32_t env_map_tid = create_env_map(env_s, "assets/20_Subway_Lights_3k.hdr");
@@ -645,6 +751,8 @@ int main(int argc, char* argv[]) {
   glBindTexture(GL_TEXTURE_CUBE_MAP, prefilter_map_tid);
   glActiveTexture(GL_TEXTURE7);
   glBindTexture(GL_TEXTURE_2D, brdf_lut_tid);
+
+  uint32_t depth_fb = create_shadow_map();
 
   // Create another framebuffer to render to
   uint32_t fb;
@@ -693,27 +801,30 @@ int main(int argc, char* argv[]) {
   bool is_next_shader_logl = true;
   bool holding_2 = false;
 
-  Vec3 light_positions[] = {
+  std::vector<Vec3> light_positions = {
     rwm_v3_init(-9.0f,  9.0f, 9.0f),
     rwm_v3_init( 9.0f,  9.0f, 9.0f),
     rwm_v3_init(-9.0f, -9.0f, 9.0f),
     rwm_v3_init( 9.0f, -9.0f, 9.0f),
   };
-  Vec3 light_colors[] = {
+  std::vector<Vec3> light_colors = {
     rwm_v3_init(100.0f, 300.0f, 300.0f),
     rwm_v3_init(300.0f, 147.0f, 0.0f),
     rwm_v3_init(300.0f, 300.0f, 300.0f),
     rwm_v3_init(300.0f, 300.0f, 300.0f)
   };
 
-  constexpr int num_rows = 7;
-  constexpr int num_cols = 7;
-  constexpr float spacing = 2.5;
+  Vec3 zero = rwm_v3_zero();
+  Vec3 up = rwm_v3_init(0.0, 1.0, 0.0);
+  Mat4 light_view_mat = get_view_mat(&light_positions[1], &zero, &up);
+  Mat4 light_projection_mat = orthographic(-10.0f, 10.0f, -10.0f, 10.0f, 1.0f, 7.5f);
+
   bool use_texture_pbr = true;
   while (!quit) {
     int64_t new_time = rwtm_now();
     frame_time = new_time - cur_time;
     cur_time = new_time;
+    printf("frame time %f\n", rwtm_to_ms(frame_time));
 
     process_raw_input(&quit);
 
@@ -868,8 +979,19 @@ int main(int argc, char* argv[]) {
     render_skybox(skybox_s, camera, env_map_tid);
     render_to_quad(quad_s, tex_color_buf);
 #else
+
+    glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
+    glBindFramebuffer(GL_FRAMEBUFFER, depth_fb);
+    glEnable(GL_DEPTH_TEST);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    shadow_s.use();
+    shadow_s.set_unif_mat4("u_light_view_mat", &light_view_mat);
+    shadow_s.set_unif_mat4("u_light_projection_mat", &light_projection_mat);
+    render_scene(cur_shader);
+
     // Deferred rendering
     // phase 1 - deferred geometry
+    glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
     glBindFramebuffer(GL_FRAMEBUFFER, g_buffer.fbo);
     glEnable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -884,43 +1006,7 @@ int main(int argc, char* argv[]) {
     cur_shader->set_unif_mat4("u_projection", &camera.persp_mat);
     cur_shader->set_unif_mat4("u_view", &camera.view_mat);
 
-    Transform ts = rwtr_trs(
-      rwm_v3_init(0.0, 0.0, 10.0),
-      rwm_v3_init(2.0, 2.0, 2.0),
-      RWTR_NO_AXIS, 0.0f
-    );
-    Quaternion q1 = rwm_q_init_rotation(rwm_v3_init(0.0, 1.0, 0.0), rwm_to_radians(-90.0f));
-    Quaternion q2 = rwm_q_init_rotation(rwm_v3_init(1.0, 0.0, 0.0), rwm_to_radians(45.0f));
-    Transform r = rwtr_init_rotate_q(rwm_q_mult(q1, q2));
-    Transform model_tr = rwtr_compose(&ts, &r);
-    cur_shader->set_unif_mat4("u_model", &model_tr.t);
-    render_mesh_full(cerberus);
-
-    model_tr = rwtr_trs(
-      rwm_v3_init(1.0, 0.0, 8.6),
-      rwm_v3_init(1.0, 1.0, 1.0),
-      RWTR_NO_AXIS, 0.0f
-    );
-    cur_shader->set_unif_mat4("u_model", &model_tr.t);
-    render_mesh_full(bunny);
-
-#if 1
-    bind_pbr_textures(aluminium);
-
-    for (int i = 0; i < num_rows; i++) {
-      float metallic = (float)i/(float)num_rows;
-      cur_shader->set_unif_1f("u_metallic", metallic);
-      for (int j = 0; j < num_cols; j++) {
-        float roughness = rwm_clamp((float)j/(float)num_cols, 0.05f, 1.0f);
-        cur_shader->set_unif_1f("u_roughness", roughness);
-        Mat4 model = rwm_m4_identity();
-        model.e[0][3] = (j - (num_cols/2)) * spacing;
-        model.e[1][3] = (i - (num_rows/2)) * spacing;
-        cur_shader->set_unif_mat4("u_model", &model);
-        render_sphere();
-      }
-    }
-#endif
+    render_scene(cur_shader);
 
     // Phase 2 - Lighting pass
 #if 1
@@ -957,7 +1043,7 @@ int main(int argc, char* argv[]) {
     glBindTexture(GL_TEXTURE_CUBE_MAP, prefilter_map_tid);
     glActiveTexture(GL_TEXTURE8);
     glBindTexture(GL_TEXTURE_2D, brdf_lut_tid);
-    for (int i = 0; i < sizeof(light_positions) / sizeof(light_positions[0]); i++) {
+    for (int i = 0; i < light_positions.size(); i++) {
       std::string pos_name = "u_light_pos[" + std::to_string(i) + "]";
       std::string col_name = "u_light_color[" + std::to_string(i) + "]";
       cur_shader->set_unif_3fv(pos_name.c_str(), &light_positions[i]);
@@ -970,6 +1056,24 @@ int main(int argc, char* argv[]) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, g_buffer.fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb);
     glBlitFramebuffer(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    // Render the light spheres
+    for (int i = 0; i < light_positions.size(); i++) {
+      solid_s.use();
+      Vec3 red = rwm_v3_init(1.f, 0, 0);
+      solid_s.set_unif_3fv("u_light_color", &light_colors[i]);
+      Mat4 model = rwm_m4_identity();
+      model.e[0][3] = light_positions[i].x;
+      model.e[1][3] = light_positions[i].y;
+      model.e[2][3] = light_positions[i].z;
+      model.e[0][0] = 0.5;
+      model.e[1][1] = 0.5;
+      model.e[2][2] = 0.5;
+      solid_s.set_unif_mat4("u_model", &model);
+      solid_s.set_unif_mat4("u_view", &camera.view_mat);
+      solid_s.set_unif_mat4("u_projection", &camera.persp_mat);
+      render_sphere();
+    }
 
     render_skybox(skybox_s, camera, env_map_tid);
 
